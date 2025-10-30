@@ -260,81 +260,72 @@ jobs:
           path: ./dist/*.whl
           retention-days: 30
 
-  create-release-alpha:
+  create-release:
     needs: [check-beta, build-linux, build-macos-arm, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download alpha artifacts
+      - name: Delete old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get all releases sorted by creation date, skip the first 3 (keep most recent)
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' | while read tag; do
+            echo "Deleting old release: $tag"
+            gh release delete "$tag" --repo ${{ github.repository }} --yes
+          done
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: bpy-*
           path: ./artifacts
-        # Exclude beta artifacts by not downloading them
 
       - name: Get current date
         id: date
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      - name: Filter alpha artifacts only
+      - name: Organize artifacts
         run: |
-          mkdir -p ./alpha-artifacts
-          # Copy only non-beta artifacts
-          find ./artifacts -name "*.whl" -not -path "*-beta/*" -exec cp {} ./alpha-artifacts/ \;
-          ls -la ./alpha-artifacts/
+          mkdir -p ./release-artifacts
+          # Copy all wheel files from all artifacts
+          find ./artifacts -name "*.whl" -exec cp {} ./release-artifacts/ \;
+          echo "Release artifacts:"
+          ls -la ./release-artifacts/
 
-      - name: Create Alpha Release
+      - name: Determine release name
+        id: release_name
+        run: |
+          if [ "${{ needs.check-beta.outputs.beta_active }}" == "true" ]; then
+            echo "name=Daily Build ${{ steps.date.outputs.date }} (Alpha + Beta v${{ needs.check-beta.outputs.beta_version }})" >> $GITHUB_OUTPUT
+            echo "body=Automated daily builds of \`bpy\` including:
+            - **Alpha builds** from main branch
+            - **Beta v${{ needs.check-beta.outputs.beta_version }} builds** from ${{ needs.check-beta.outputs.beta_branch }} branch
+
+            ## Installation
+            \`\`\`bash
+            pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
+            \`\`\`" >> $GITHUB_OUTPUT
+          else
+            echo "name=Daily Build ${{ steps.date.outputs.date }} (Alpha)" >> $GITHUB_OUTPUT
+            echo "body=Automated daily alpha builds of \`bpy\` from main branch
+
+            ## Installation
+            \`\`\`bash
+            pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
+            \`\`\`" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: daily-${{ steps.date.outputs.date }}
-          name: Alpha ${{ steps.date.outputs.date }}
-          body: |
-            Automated daily alpha builds of `bpy` from main branch
-
-            ## Installation
-            ```bash
-            pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
-            ```
+          name: ${{ steps.release_name.outputs.name }}
+          body: ${{ steps.release_name.outputs.body }}
           draft: false
-          prerelease: true
+          prerelease: false
           files: |
-            ./alpha-artifacts/*.whl
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  create-release-beta:
-    needs: [check-beta, build-linux, build-macos-arm, build-windows]
-    if: needs.check-beta.outputs.beta_active == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download beta artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bpy-*-beta
-          path: ./artifacts
-
-      - name: Get current date
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      - name: Create Beta Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: beta-v${{ needs.check-beta.outputs.beta_version }}-${{ steps.date.outputs.date }}
-          name: Beta v${{ needs.check-beta.outputs.beta_version }} - ${{ steps.date.outputs.date }}
-          body: |
-            Automated daily beta builds of `bpy` v${{ needs.check-beta.outputs.beta_version }} from ${{ needs.check-beta.outputs.beta_branch }} branch
-
-            ## Installation
-            ```bash
-            pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
-            ```
-          draft: false
-          prerelease: true
-          files: |
-            ./artifacts/**/*.whl
+            ./release-artifacts/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
