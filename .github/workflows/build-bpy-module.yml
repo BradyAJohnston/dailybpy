@@ -266,21 +266,22 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Delete old releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Get all releases sorted by creation date, skip the first 3 (keep most recent)
-          gh release list --repo ${{ github.repository }} --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' | while read tag; do
-            echo "Deleting old release: $tag"
-            gh release delete "$tag" --repo ${{ github.repository }} --yes
-          done
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: bpy-*
           path: ./artifacts
+
+      - name: Delete all previous releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Deleting all previous releases..."
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[].tagName' | while read tag; do
+            echo "Deleting release: $tag"
+            gh release delete "$tag" --repo ${{ github.repository }} --yes --cleanup-tag
+          done
+          echo "All previous releases deleted"
 
       - name: Get current date
         id: date
