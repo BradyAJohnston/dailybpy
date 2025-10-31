@@ -9,13 +9,23 @@ A repo for these builds is hosted at `bradyajohnston.github.io/dailybpy` so you 
 
 ## Installation
 
-#### `uv`
+### `uv`
+#### Install the Latest Alpha Build
 ```bash
-uv pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
+uv pip install bpy --index https://bradyajohnston.github.io/dailybpy/
 ```
-#### `pip`
+
+#### Install a specific version for beta / alpha
 ```bash
-pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/
+uv pip install "bpy==5.0.*" --index https://bradyajohnston.github.io/dailybpy/
+```
+
+Once the package becomes available through `pypi` it will fallback to installing from there instead.
+
+
+### `pip`
+```bash
+pip install bpy --index-url https://bradyajohnston.github.io/dailybpy/
 ```
 
 ### Project Configuration
