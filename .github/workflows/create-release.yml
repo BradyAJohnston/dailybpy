@@ -137,3 +137,11 @@ jobs:
             ./release-artifacts/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger package index update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Triggering publish-index workflow..."
+          gh workflow run publish-index.yml --repo ${{ github.repository }}
+          echo "Package index update triggered"
