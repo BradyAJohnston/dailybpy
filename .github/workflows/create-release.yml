@@ -1,0 +1,139 @@
+name: Create Release
+
+on:
+  workflow_run:
+    workflows: ["Build Blender bpy Module"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Workflow run ID to download artifacts from (leave empty for latest)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine workflow run ID
+        id: run_id
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.run_id }}" ]; then
+            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> $GITHUB_OUTPUT
+          else
+            # Get the latest successful workflow run
+            RUN_ID=$(gh run list --workflow=build-bpy-module.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
+            echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          fi
+          echo "Using workflow run ID: $(cat $GITHUB_OUTPUT | grep run_id | cut -d'=' -f2)"
+
+      - name: Download all artifacts from workflow run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Downloading artifacts from run ${{ steps.run_id.outputs.run_id }}..."
+          mkdir -p ./artifacts
+
+          # List all artifacts from the workflow run
+          gh run download ${{ steps.run_id.outputs.run_id }} --repo ${{ github.repository }} --dir ./artifacts
+
+          echo "Downloaded artifacts:"
+          find ./artifacts -name "*.whl" -type f
+
+      - name: Check beta status from artifacts
+        id: check_beta
+        run: |
+          if ls ./artifacts/*-beta/*.whl 1> /dev/null 2>&1; then
+            echo "beta_active=true" >> $GITHUB_OUTPUT
+            # Try to extract version from beta wheel filename
+            BETA_WHEEL=$(ls ./artifacts/*-beta/*.whl | head -n1)
+            if [[ $BETA_WHEEL =~ bpy-([0-9]+\.[0-9]+)\. ]]; then
+              echo "beta_version=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+            else
+              echo "beta_version=unknown" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "beta_active=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Delete all previous releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Deleting all previous releases..."
+          gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[].tagName' | while read tag; do
+            if [ -n "$tag" ]; then
+              echo "Deleting release: $tag"
+              gh release delete "$tag" --repo ${{ github.repository }} --yes --cleanup-tag || echo "Failed to delete $tag, continuing..."
+            fi
+          done
+          echo "All previous releases deleted"
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p ./release-artifacts
+          # Copy all wheel files from all artifacts
+          find ./artifacts -name "*.whl" -exec cp {} ./release-artifacts/ \;
+          echo "Release artifacts:"
+          ls -la ./release-artifacts/
+
+      - name: Determine release details
+        id: release_details
+        run: |
+          if [ "${{ steps.check_beta.outputs.beta_active }}" == "true" ]; then
+            echo "name=Daily Build ${{ steps.date.outputs.date }} (Alpha + Beta v${{ steps.check_beta.outputs.beta_version }})" >> $GITHUB_OUTPUT
+
+            # Use EOF delimiter for multiline output
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            echo "Automated daily builds of \`bpy\` including:" >> $GITHUB_OUTPUT
+            echo "- **Alpha builds** from main branch" >> $GITHUB_OUTPUT
+            echo "- **Beta v${{ steps.check_beta.outputs.beta_version }} builds** from release branch" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "## Installation" >> $GITHUB_OUTPUT
+            echo "\`\`\`bash" >> $GITHUB_OUTPUT
+            echo "pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/" >> $GITHUB_OUTPUT
+            echo "\`\`\`" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "name=Daily Build ${{ steps.date.outputs.date }} (Alpha)" >> $GITHUB_OUTPUT
+
+            # Use EOF delimiter for multiline output
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            echo "Automated daily alpha builds of \`bpy\` from main branch" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "## Installation" >> $GITHUB_OUTPUT
+            echo "\`\`\`bash" >> $GITHUB_OUTPUT
+            echo "pip install bpy --extra-index-url https://bradyajohnston.github.io/dailybpy/" >> $GITHUB_OUTPUT
+            echo "\`\`\`" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: daily-${{ steps.date.outputs.date }}
+          name: ${{ steps.release_details.outputs.name }}
+          body: ${{ steps.release_details.outputs.body }}
+          draft: false
+          prerelease: false
+          files: |
+            ./release-artifacts/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
