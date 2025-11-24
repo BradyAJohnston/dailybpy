@@ -119,12 +119,8 @@ jobs:
         include:
           - branch: main
             suffix: ""
-          - branch: ${{ needs.check-beta.outputs.beta_branch }}
-            suffix: "-beta"
-            version: ${{ needs.check-beta.outputs.beta_version }}
     steps:
       - name: Checkout Blender repository
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/checkout@v4
         with:
           repository: "blender/blender"
@@ -133,7 +129,6 @@ jobs:
           submodules: "recursive"
 
       - name: Set up Python
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -144,29 +139,24 @@ jobs:
       #     brew install cmake
 
       - name: Update libraries
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
           make update
 
       - name: Build bpy module
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
           make bpy
 
       - name: Create wheel package
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
           python -m pip install wheel setuptools
           python ./build_files/utils/make_bpy_wheel.py ../build_darwin_bpy/bin/
 
       - name: Copy wheel to workspace
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
           mkdir -p ./dist
           cp ../build_darwin_bpy/bin/bpy-*.whl ./dist/
 
       - name: Upload wheel as artifact
-        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bpy-macos-arm64${{ matrix.suffix }}
