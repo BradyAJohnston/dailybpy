@@ -112,9 +112,10 @@ jobs:
 
   build-macos-arm:
     needs: check-beta
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: ["macos-15", "macos-26"]
         include:
           - branch: main
             suffix: ""
