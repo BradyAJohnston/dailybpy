@@ -68,7 +68,13 @@ jobs:
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
+      
+      - name: Set up GCC
+        uses: egor-tensin/setup-gcc@v2
+        with:
+          version: 14
+          platform: x64
 
       - name: Install dependencies
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
@@ -135,7 +141,7 @@ jobs:
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # cmake already installed on GHA runners
       # - name: Install dependencies
@@ -197,7 +203,7 @@ jobs:
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Set up Visual Studio
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
