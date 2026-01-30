@@ -44,7 +44,7 @@ jobs:
 
   build-linux:
     needs: check-beta
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
@@ -69,18 +69,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      
-      - name: Set up GCC
-        uses: egor-tensin/setup-gcc@v2
-        with:
-          version: 14
-          platform: x64
-
+    
       - name: Install dependencies
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            gcc-14 g++-14 \
             build-essential cmake git subversion \
             libx11-dev libxxf86vm-dev libxcursor-dev libxi-dev \
             libxrandr-dev libxinerama-dev libegl-dev \
