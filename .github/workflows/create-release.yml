@@ -98,6 +98,7 @@ jobs:
         id: release_details
         run: |
           if [ "${{ steps.check_beta.outputs.beta_active }}" == "true" ]; then
+            echo "name=Daily Build ${{ steps.date.outputs.date }} (Alpha + Beta v${{ steps.check_beta.outputs.beta_version }})" >> $GITHUB_OUTPUT
 
             # Use EOF delimiter for multiline output
             echo "body<<EOF" >> $GITHUB_OUTPUT
@@ -128,7 +129,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: daily-${{ steps.date.outputs.date }}
-          name: "Daily Builds"
+          name: ${{ steps.release_details.outputs.name }}
           body: ${{ steps.release_details.outputs.body }}
           draft: false
           prerelease: false
