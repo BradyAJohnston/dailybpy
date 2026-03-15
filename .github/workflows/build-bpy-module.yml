@@ -85,6 +85,17 @@ jobs:
         run: |
           make update
 
+      - name: Patch Python linking (workaround for blender/blender#139741)
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          # Upstream commits 8285ff7b81 + 1f57e55bae (2026-03-09) broke `make bpy` on Linux:
+          # libpython is excluded from the link for WITH_PYTHON_MODULE=ON builds, but the
+          # version-script mechanism that previously allowed runtime resolution no longer works.
+          # This patch restores Python library linking until upstream fixes the issue.
+          # See: blender-bpy-linux-link-bug.md
+          sed -i 's/if(WITH_PYTHON_MODULE)/if(FALSE) # patched: restore python linking/' \
+            build_files/cmake/platform/dependency_targets.cmake
+
       - name: Build bpy module
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
