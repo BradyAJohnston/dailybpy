@@ -84,7 +84,9 @@ jobs:
 
       - name: Get current date
         id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: |
+          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Organize artifacts
         run: |
@@ -92,6 +94,16 @@ jobs:
           # Copy all wheel files from all artifacts
           find ./artifacts -name "*.whl" -exec cp {} ./release-artifacts/ \;
           echo "Release artifacts:"
+          ls -la ./release-artifacts/
+
+      - name: Append build date to wheel versions
+        # Daily builds keep the same upstream version (e.g. 5.1.0a0) for weeks, so
+        # pip/uv think they are already up to date. Appending the build timestamp as a
+        # PEP 440 local version (5.1.0a0+YYYYMMDDHHMM) makes each build a distinct,
+        # strictly higher version so package managers upgrade to the latest build.
+        run: |
+          python3 redate_wheels.py ${{ steps.date.outputs.timestamp }} ./release-artifacts/*.whl
+          echo "Re-versioned artifacts:"
           ls -la ./release-artifacts/
 
       - name: Determine release details
