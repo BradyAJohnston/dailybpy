@@ -16,7 +16,9 @@ re-versioned one) and the new path is printed.
 """
 
 import base64
+import csv
 import hashlib
+import io
 import re
 import sys
 import zipfile
@@ -43,7 +45,7 @@ def redate_wheel(wheel_path: Path, stamp: str) -> Path:
     out_path = wheel_path.with_name("-".join([name, new_version, *tail]) + ".whl")
 
     record_path = f"{new_distinfo}/RECORD"
-    record_lines = []
+    record_rows = []
 
     with zipfile.ZipFile(wheel_path) as zin, zipfile.ZipFile(
         out_path, "w", zipfile.ZIP_DEFLATED
@@ -73,10 +75,14 @@ def redate_wheel(wheel_path: Path, stamp: str) -> Path:
             zout.writestr(info, blob)
 
             digest = _urlsafe_b64_nopad(hashlib.sha256(blob).digest())
-            record_lines.append(f"{new_name},sha256={digest},{len(blob)}")
+            record_rows.append((new_name, f"sha256={digest}", str(len(blob))))
 
-        record_lines.append(f"{record_path},,")
-        zout.writestr(record_path, "\n".join(record_lines) + "\n")
+        record_rows.append((record_path, "", ""))
+        # RECORD is a CSV file: paths containing commas must be quoted, so write
+        # it with the csv module rather than naive string joins.
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="\n").writerows(record_rows)
+        zout.writestr(record_path, buf.getvalue())
 
     if out_path != wheel_path:
         wheel_path.unlink()
