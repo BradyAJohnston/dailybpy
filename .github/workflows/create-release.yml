@@ -5,6 +5,9 @@ on:
     workflows: ["Build Blender bpy Module"]
     types:
       - completed
+    # Builds dispatched from test branches must never be released.
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       run_id:
@@ -34,8 +37,8 @@ jobs:
           elif [ "${{ github.event_name }}" == "workflow_run" ]; then
             echo "run_id=${{ github.event.workflow_run.id }}" >> $GITHUB_OUTPUT
           else
-            # Get the latest successful workflow run
-            RUN_ID=$(gh run list --workflow=build-bpy-module.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
+            # Get the latest successful workflow run (runs from other branches use the same workflow file)
+            RUN_ID=$(gh run list --workflow=build-bpy-module.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
             echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
           fi
           echo "Using workflow run ID: $(cat $GITHUB_OUTPUT | grep run_id | cut -d'=' -f2)"
