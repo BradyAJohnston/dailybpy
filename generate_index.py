@@ -18,16 +18,19 @@ def normalize_package_name(name):
 
 
 def get_releases():
-    """Fetch all releases using gh CLI."""
+    """Fetch the newest release using gh CLI."""
     try:
         # First, get the list of release tags
         result = subprocess.run(
-            ["gh", "release", "list", "--json", "tagName", "--limit", "100"],
+            ["gh", "release", "list", "--json", "tagName,publishedAt", "--limit", "100"],
             capture_output=True,
             text=True,
             check=True
         )
         releases = json.loads(result.stdout)
+        # Only index the newest release. The previous one is kept for a day so the
+        # currently deployed index never links to deleted wheels, but it isn't listed.
+        releases = sorted(releases, key=lambda r: r["publishedAt"], reverse=True)[:1]
 
         # Then fetch assets for each release
         for release in releases:
