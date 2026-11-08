@@ -5,8 +5,34 @@ on:
     # Run daily at 2 AM UTC
     - cron: "0 2 * * *"
   workflow_dispatch: # Allow manual triggering
+    inputs:
+      platforms:
+        description: "Platforms to build (scheduled runs always build all)"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - linux
+          - windows
+          - linux-windows
+          - macos
 
 jobs:
+  # Runs of this workflow trigger "Create Release" (workflow_run), which deletes
+  # all releases and republishes the package index from the run's artifacts.
+  # That workflow only proceeds when this one concludes with success, so any
+  # run that is not on main fails here on purpose. This lets feature branches
+  # be built and tested without overwriting the published wheels.
+  guard-non-main:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail non-main runs so no release is created
+        run: |
+          echo "::error::Run on ${GITHUB_REF}, not main. Failing on purpose so 'Create Release' does not publish these wheels. Build jobs still run and upload artifacts."
+          exit 1
+
   check-beta:
     runs-on: ubuntu-latest
     outputs:
@@ -44,7 +70,21 @@ jobs:
 
   build-linux:
     needs: check-beta
+    if: github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || contains(inputs.platforms, 'linux')
     runs-on: ubuntu-24.04
+    env:
+      # NVIDIA GPU support for Cycles. Versions follow Blender's official
+      # builds (build_files/buildbot/config/blender_version.cmake): CUDA 13
+      # is the default toolkit and OptiX SDK 9.0.0. Only the OptiX headers
+      # are needed at build time (github.com/NVIDIA/optix-dev).
+      CUDA_APT_VERSION: "13-4"
+      CUDA_ROOT: /usr/local/cuda-13.4
+      OPTIX_VERSION: "9.0.0"
+      # Precompiled cubins: Turing (sm_75), Ampere/Ada (sm_86, also used by
+      # sm_89 via the minor-version fallback), Blackwell (sm_120). compute_75
+      # PTX is the JIT fallback for anything else (e.g. sm_80, sm_90, sm_100).
+      # Same sm_75+ subset as Blender's default CYCLES_CUDA_BINARIES_ARCH.
+      CYCLES_CUDA_ARCHS: "sm_75;sm_86;sm_120;compute_75"
     strategy:
       matrix:
         include:
@@ -70,6 +110,68 @@ jobs:
         with:
           python-version: "3.13"
     
+      - name: Checkout dailybpy scripts
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: .dailybpy
+
+      - name: Free disk space and add swap
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          df -h /
+          # Remove large preinstalled toolchains the build does not use.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/share/swift /usr/local/julia* /opt/az /usr/local/share/powershell
+          sudo docker image prune --all --force > /dev/null || true
+          # Several nvcc processes compiling Cycles kernels in parallel can
+          # exceed the runner's 16 GB of RAM.
+          sudo fallocate -l 12G /swapfile_build
+          sudo chmod 600 /swapfile_build
+          sudo mkswap /swapfile_build
+          sudo swapon /swapfile_build
+          df -h /
+          free -h
+
+      - name: Install CUDA toolkit
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          rm cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          # nvcc plus the headers it needs (cudart-dev, driver-dev, crt, cccl).
+          sudo apt-get install -y --no-install-recommends cuda-nvcc-${{ env.CUDA_APT_VERSION }}
+          echo "${CUDA_ROOT}/bin" >> "$GITHUB_PATH"
+          "${CUDA_ROOT}/bin/nvcc" --version
+
+      - name: Fetch OptiX SDK headers
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          git clone --depth 1 --branch "v${OPTIX_VERSION}" \
+            https://github.com/NVIDIA/optix-dev.git "${RUNNER_TEMP}/optix-sdk"
+          grep '#define OPTIX_VERSION' "${RUNNER_TEMP}/optix-sdk/include/optix.h"
+
+      - name: Write CUDA/OptiX CMake cache overrides
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          # Loaded after bpy_module.cmake via BUILD_CMAKE_ARGS=-C<file>.
+          # Mirrors the NVIDIA part of blender_release.cmake.
+          cat > "${RUNNER_TEMP}/cuda_optix.cmake" <<EOF
+          set(WITH_CYCLES_DEVICE_CUDA    ON CACHE BOOL "" FORCE)
+          set(WITH_CYCLES_DEVICE_OPTIX   ON CACHE BOOL "" FORCE)
+          set(WITH_CYCLES_CUDA_BINARIES  ON CACHE BOOL "" FORCE)
+          set(WITH_CUDA_DYNLOAD          ON CACHE BOOL "" FORCE)
+          set(CUDA_TOOLKIT_ROOT_DIR      "${CUDA_ROOT}" CACHE PATH "" FORCE)
+          set(CUDA_NVCC_EXECUTABLE       "${CUDA_ROOT}/bin/nvcc" CACHE FILEPATH "" FORCE)
+          set(CUDA13_TOOLKIT_ROOT_DIR    "${CUDA_ROOT}" CACHE PATH "" FORCE)
+          set(CUDA13_NVCC_EXECUTABLE     "${CUDA_ROOT}/bin/nvcc" CACHE FILEPATH "" FORCE)
+          set(OPTIX_ROOT_DIR             "${RUNNER_TEMP}/optix-sdk" CACHE PATH "" FORCE)
+          set(CYCLES_CUDA_BINARIES_ARCH  "${CYCLES_CUDA_ARCHS}" CACHE STRING "" FORCE)
+          EOF
+          cat "${RUNNER_TEMP}/cuda_optix.cmake"
+
       - name: Install dependencies
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
@@ -109,7 +211,10 @@ jobs:
       - name: Build bpy module
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         run: |
-          make CC=gcc-14 CXX=g++-14 bpy
+          make CC=gcc-14 CXX=g++-14 bpy BUILD_CMAKE_ARGS="-C${RUNNER_TEMP}/cuda_optix.cmake"
+          grep -E '^(WITH_CYCLES_DEVICE_OPTIX|WITH_CYCLES_DEVICE_CUDA|WITH_CYCLES_CUDA_BINARIES|WITH_CUDA_DYNLOAD|CYCLES_CUDA_BINARIES_ARCH|OPTIX_INCLUDE_DIR|CUDA_NVCC_EXECUTABLE)[:=]' \
+            ../build_linux_bpy/CMakeCache.txt
+          df -h /
 
       - name: Create wheel package
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
@@ -123,6 +228,16 @@ jobs:
           mkdir -p ./dist
           cp ../build_linux_bpy/bin/bpy-*.whl ./dist/
 
+      - name: Verify CUDA and OptiX support in wheel
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        run: |
+          WHEEL=$(ls ./dist/bpy-*.whl)
+          ls -la "$WHEEL"
+          python -m venv "${RUNNER_TEMP}/verify-venv"
+          "${RUNNER_TEMP}/verify-venv/bin/pip" install --quiet "$WHEEL"
+          python .dailybpy/scripts/verify_gpu_wheel.py "$WHEEL" \
+            --archs "${CYCLES_CUDA_ARCHS}" --python "${RUNNER_TEMP}/verify-venv/bin/python"
+
       - name: Upload wheel as artifact
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
         uses: actions/upload-artifact@v4
@@ -133,6 +248,7 @@ jobs:
 
   build-macos-arm:
     needs: check-beta
+    if: github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || contains(inputs.platforms, 'macos')
     runs-on: macos-latest
     strategy:
       matrix:
@@ -195,7 +311,14 @@ jobs:
 
   build-windows:
     needs: check-beta
+    if: github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || contains(inputs.platforms, 'windows')
     runs-on: windows-latest
+    env:
+      # Same NVIDIA setup as the Linux job. CUDA comes from NVIDIA's redist
+      # archives (nvcc and headers only) instead of the full installer.
+      CUDA_REDIST_VERSION: "13.4.3"
+      OPTIX_VERSION: "9.0.0"
+      CYCLES_CUDA_ARCHS: "sm_75;sm_86;sm_120;compute_75"
     strategy:
       matrix:
         include:
@@ -229,6 +352,55 @@ jobs:
         shell: powershell
         run: |
           "y" | cmd /c make.bat update
+
+      - name: Checkout dailybpy scripts
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: .dailybpy
+
+      - name: Install CUDA toolkit
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        shell: bash
+        run: |
+          CUDA_DIR="$(cygpath -m "${RUNNER_TEMP}")/cuda"
+          python .dailybpy/scripts/fetch_cuda_redist.py "${CUDA_REDIST_VERSION}" windows-x86_64 "$CUDA_DIR"
+          echo "CUDA_DIR=$CUDA_DIR" >> "$GITHUB_ENV"
+          echo "CUDA_PATH=$(cygpath -w "$CUDA_DIR")" >> "$GITHUB_ENV"
+          echo "$(cygpath -w "$CUDA_DIR")\bin" >> "$GITHUB_PATH"
+          "$CUDA_DIR/bin/nvcc.exe" --version
+
+      - name: Fetch OptiX SDK headers
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        shell: bash
+        run: |
+          OPTIX_DIR="$(cygpath -m "${RUNNER_TEMP}")/optix-sdk"
+          git clone --depth 1 --branch "v${OPTIX_VERSION}" https://github.com/NVIDIA/optix-dev.git "$OPTIX_DIR"
+          grep '#define OPTIX_VERSION' "$OPTIX_DIR/include/optix.h"
+          echo "OPTIX_DIR=$OPTIX_DIR" >> "$GITHUB_ENV"
+
+      - name: Enable CUDA binaries and OptiX in bpy config
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        shell: bash
+        run: |
+          # make.bat has no way to pass extra CMake arguments, so include the
+          # overrides from bpy_module.cmake (which `make.bat bpy` loads).
+          CACHE_FILE="$(cygpath -m "${RUNNER_TEMP}")/cuda_optix.cmake"
+          cat > "$CACHE_FILE" <<EOF
+          set(WITH_CYCLES_DEVICE_CUDA    ON CACHE BOOL "" FORCE)
+          set(WITH_CYCLES_DEVICE_OPTIX   ON CACHE BOOL "" FORCE)
+          set(WITH_CYCLES_CUDA_BINARIES  ON CACHE BOOL "" FORCE)
+          set(WITH_CUDA_DYNLOAD          ON CACHE BOOL "" FORCE)
+          set(CUDA_TOOLKIT_ROOT_DIR      "${CUDA_DIR}" CACHE PATH "" FORCE)
+          set(CUDA_NVCC_EXECUTABLE       "${CUDA_DIR}/bin/nvcc.exe" CACHE FILEPATH "" FORCE)
+          set(CUDA13_TOOLKIT_ROOT_DIR    "${CUDA_DIR}" CACHE PATH "" FORCE)
+          set(CUDA13_NVCC_EXECUTABLE     "${CUDA_DIR}/bin/nvcc.exe" CACHE FILEPATH "" FORCE)
+          set(OPTIX_ROOT_DIR             "${OPTIX_DIR}" CACHE PATH "" FORCE)
+          set(CYCLES_CUDA_BINARIES_ARCH  "${CYCLES_CUDA_ARCHS}" CACHE STRING "" FORCE)
+          EOF
+          printf '\ninclude("%s")\n' "$CACHE_FILE" >> build_files/cmake/config/bpy_module.cmake
+          cat "$CACHE_FILE"
+          tail -n 3 build_files/cmake/config/bpy_module.cmake
 
       - name: Build bpy module
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
@@ -272,6 +444,18 @@ jobs:
             $binPath = "..\$env:BUILD_DIR\bin"
           }
           Copy-Item -Path "$binPath\bpy-*.whl" -Destination .\dist\
+
+      - name: Verify CUDA and OptiX support in wheel
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        shell: bash
+        run: |
+          WHEEL=$(ls ./dist/bpy-*.whl)
+          ls -la "$WHEEL"
+          VENV="$(cygpath -m "${RUNNER_TEMP}")/verify-venv"
+          python -m venv "$VENV"
+          "$VENV/Scripts/python.exe" -m pip install --quiet "$WHEEL"
+          python .dailybpy/scripts/verify_gpu_wheel.py "$WHEEL" \
+            --archs "${CYCLES_CUDA_ARCHS}" --python "$VENV/Scripts/python.exe"
 
       - name: Upload wheel as artifact
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'

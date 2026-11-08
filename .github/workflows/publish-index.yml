@@ -20,6 +20,9 @@ concurrency:
 
 jobs:
   build-index:
+    # Skip when Create Release did not succeed (e.g. it was skipped for a
+    # non-main build), so the index only changes after a real release.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
