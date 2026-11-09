@@ -19,8 +19,8 @@ on:
           - macos
 
 jobs:
-  # Runs of this workflow trigger "Create Release" (workflow_run), which deletes
-  # all releases and republishes the package index from the run's artifacts.
+  # Runs of this workflow trigger "Create Release" (workflow_run), which publishes
+  # a release, prunes old ones and republishes the package index from the run's artifacts.
   # That workflow only proceeds when this one concludes with success, so any
   # run that is not on main fails here on purpose. This lets feature branches
   # be built and tested without overwriting the published wheels.
@@ -194,6 +194,26 @@ jobs:
           grep -E '^(WITH_CYCLES_DEVICE_OPTIX|WITH_CYCLES_DEVICE_CUDA|WITH_CYCLES_CUDA_BINARIES|WITH_CUDA_DYNLOAD|CYCLES_CUDA_BINARIES_ARCH|OPTIX_INCLUDE_DIR|CUDA_NVCC_EXECUTABLE)[:=]' \
             ../build_linux_bpy/CMakeCache.txt
           df -h /
+
+      - name: Drop shared library symlinks
+        if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'
+        working-directory: ../build_linux_bpy/bin/bpy/lib
+        run: |
+          # Bundled libraries are installed as symlink chains (libfoo.so -> libfoo.so.1
+          # -> libfoo.so.1.2.3). Wheels can't hold symlinks, so each link becomes a full
+          # copy (~180 MB extra). Keep one file per library, named by its SONAME (the
+          # name the loader looks for), like the official PyPI wheels.
+          du -sh .
+          for f in $(find . -maxdepth 1 -type f -name '*.so*'); do
+            soname=$( (readelf -d "$f" 2>/dev/null || true) | sed -n 's/.*(SONAME).*\[\(.*\)\]/\1/p')
+            if [ -n "$soname" ] && [ "./$soname" != "$f" ] && [ -L "$soname" ]; then
+              rm "$soname"
+              mv "$f" "$soname"
+            fi
+          done
+          find . -maxdepth 1 -type l -name '*.so*' -print -delete
+          du -sh .
+          ls -la
 
       - name: Create wheel package
         if: matrix.branch == 'main' || needs.check-beta.outputs.beta_active == 'true'

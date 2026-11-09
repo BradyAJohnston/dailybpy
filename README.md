@@ -55,6 +55,7 @@ uv sync
 
 - **Version**: built from the lasted main (alpha) branch
 - **Build Schedule**: Daily at 2 AM UTC
+- **Retention**: builds from the last 30 days stay available, e.g. `bpy==5.4.0a0+202611081101`
 - **Source**: [Blender official repository](https://github.com/blender/blender)
 
 ### Supported Platforms
@@ -64,6 +65,21 @@ uv sync
 | Linux | x86_64 | ✅ |
 | macOS | ARM64 (Apple Silicon) | ✅ |
 | Windows | x64 | ✅ |
+
+### GPU Support (Cycles)
+
+| Backend | Linux | Windows | macOS |
+|---------|-------|---------|-------|
+| NVIDIA CUDA | ✅ | ✅ | — |
+| NVIDIA OptiX | ✅ | ✅ | — |
+| Apple Metal | — | — | ✅ |
+| AMD HIP | ⚠️ | ⚠️ | — |
+| Intel oneAPI | ❌ | ❌ | — |
+
+- CUDA kernels are precompiled for Turing (`sm_75`), Ampere/Ada (`sm_86`) and Blackwell (`sm_120`), so GTX 16xx / RTX 20xx and newer cards work. Other NVIDIA GPUs fall back to JIT-compiling the `compute_75` PTX on first render.
+- The builds use CUDA 13 and OptiX 9.0, so they need a recent NVIDIA driver (R580 or newer).
+- AMD HIP support is compiled in, but no HIP kernels are precompiled. Without the HIP SDK installed to compile them at runtime (untested), AMD GPUs aren't usable.
+- Intel oneAPI is not built. The official [PyPI builds](https://pypi.org/project/bpy/) include precompiled HIP and oneAPI kernels.
 
 
 ## License
