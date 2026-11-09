@@ -143,15 +143,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Old releases are removed only after the new one exists, and the previous release is kept:
-      # the deployed index (and any cached copy of it) still links to it until "Publish Package Index"
-      # replaces it, so deleting it here would break installs in that window.
-      - name: Delete old releases (keep the 2 newest)
+      # Releases from the last 30 days are kept (and all listed in the index) so a specific daily
+      # build can still be installed, e.g. to bisect a regression. The 2 newest are always kept, even
+      # if builds stop for a while: the deployed index (and any cached copy of it) links to them.
+      - name: Delete releases older than 30 days
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release list --repo ${{ github.repository }} --limit 100 --json tagName,publishedAt \
-            --jq 'sort_by(.publishedAt) | reverse | .[2:] | .[].tagName' | while read tag; do
+            --jq '(now - 30*86400 | todate) as $cutoff
+                  | sort_by(.publishedAt) | reverse | .[2:]
+                  | map(select(.publishedAt < $cutoff)) | .[].tagName' | while read tag; do
             if [ -n "$tag" ]; then
               echo "Deleting release: $tag"
               gh release delete "$tag" --repo ${{ github.repository }} --yes --cleanup-tag || echo "Failed to delete $tag, continuing..."
