@@ -22,7 +22,9 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Only publish wheels built from this repo's main branch. Builds of other
+    # branches (for testing) also fail on purpose in build-bpy-module.yml.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
